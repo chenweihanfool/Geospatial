@@ -54,7 +54,11 @@ export default function SurveyPoints() {
     },
   });
 
-  // Database switch form setup
+  // Database switch state
+  const [selectedTable, setSelectedTable] = useState<string>("");
+  const [showAdvancedSwitch, setShowAdvancedSwitch] = useState(false);
+
+  // Database switch form setup (advanced mode)
   const dbSwitchForm = useForm({
     defaultValues: {
       host: "",
@@ -84,7 +88,30 @@ export default function SurveyPoints() {
   const { data: dbInfo, refetch: refetchDbInfo } = useQuery({
     queryKey: ["/api/database/info"],
     queryFn: ({ queryKey }) => apiRequest({ method: "GET", url: queryKey[0] }),
-    enabled: isDbInfoOpen,
+    enabled: isDbInfoOpen || isDbSwitchOpen,
+  });
+
+  // Fetch available tables for the dropdown
+  const { data: tablesData, isLoading: isLoadingTables } = useQuery({
+    queryKey: ["/api/database/list-tables"],
+    queryFn: ({ queryKey }) => apiRequest({ method: "GET", url: queryKey[0] }),
+    enabled: isDbSwitchOpen,
+  });
+
+  // Set table mutation (no reconnection)
+  const setTableMutation = useMutation({
+    mutationFn: async (table: string) =>
+      apiRequest({ method: "POST", url: "/api/database/set-table", data: { table } }),
+    onSuccess: (result) => {
+      toast({ title: "成功", description: result.message });
+      setIsDbSwitchOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["/api/survey-points/count"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/database/info"] });
+      if (isViewDialogOpen) queryClient.invalidateQueries({ queryKey: ["/api/survey-points"] });
+    },
+    onError: (error: any) => {
+      toast({ title: "錯誤", description: error.message || "切換資料表失敗", variant: "destructive" });
+    },
   });
 
   // Create survey point mutation
@@ -171,6 +198,17 @@ export default function SurveyPoints() {
       });
     },
   });
+
+  // Pre-fill selectedTable when dialog opens and dbInfo is loaded
+  useEffect(() => {
+    if (isDbSwitchOpen && dbInfo?.table && !selectedTable) {
+      setSelectedTable(dbInfo.table);
+    }
+    if (!isDbSwitchOpen) {
+      setSelectedTable("");
+      setShowAdvancedSwitch(false);
+    }
+  }, [isDbSwitchOpen, dbInfo?.table]);
 
   // Database switch mutation
   const dbSwitchMutation = useMutation({
@@ -1014,83 +1052,146 @@ export default function SurveyPoints() {
             <DialogHeader>
               <DialogTitle className="flex items-center">
                 <Database className="mr-2 h-5 w-5 text-blue-600" />
-                切換資料庫連線
+                切換操作資料表
               </DialogTitle>
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                輸入新的資料庫連線資訊以切換資料庫
-              </p>
             </DialogHeader>
-            <form onSubmit={dbSwitchForm.handleSubmit(onDbSwitchSubmit)} className="space-y-4">
-              <div>
-                <Label htmlFor="host">伺服器主機</Label>
-                <Input
-                  id="host"
-                  {...dbSwitchForm.register("host")}
-                  placeholder="例如：toufen.postgres.database.azure.com"
-                  className="mt-1"
-                />
+
+            <div className="space-y-4">
+              {/* Current connection info */}
+              <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-3 space-y-1 text-sm">
+                <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">目前連線</p>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-600 dark:text-gray-400">伺服器</span>
+                  <span className="font-mono text-xs text-gray-800 dark:text-gray-200">{dbInfo?.host || "—"}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-600 dark:text-gray-400">資料庫</span>
+                  <span className="font-mono text-xs text-gray-800 dark:text-gray-200">{dbInfo?.database || "—"}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-600 dark:text-gray-400">使用者</span>
+                  <span className="font-mono text-xs text-gray-800 dark:text-gray-200">{dbInfo?.username || "—"}</span>
+                </div>
+                <div className="flex items-center justify-between border-t border-gray-200 dark:border-gray-700 pt-1 mt-1">
+                  <span className="text-gray-600 dark:text-gray-400 font-medium">目前資料表</span>
+                  <span className="font-mono text-xs font-semibold text-blue-600 dark:text-blue-400">{dbInfo?.table || "—"}</span>
+                </div>
               </div>
-              
+
+              {/* Table selector */}
               <div>
-                <Label htmlFor="port">連接埠</Label>
-                <Input
-                  id="port"
-                  {...dbSwitchForm.register("port")}
-                  placeholder="5432"
-                  className="mt-1"
-                />
+                <Label>選擇操作資料表</Label>
+                {isLoadingTables ? (
+                  <div className="mt-1 h-10 flex items-center px-3 border rounded-md bg-gray-50 dark:bg-gray-800 text-sm text-gray-500">
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500 mr-2" />
+                    偵測資料表中…
+                  </div>
+                ) : (
+                  <Select value={selectedTable} onValueChange={setSelectedTable}>
+                    <SelectTrigger className="mt-1">
+                      <SelectValue placeholder="請選擇資料表…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {tablesData?.tables?.map((t: any) => (
+                        <SelectItem key={t.fullName} value={t.fullName}>
+                          <span className="font-mono text-sm">{t.fullName}</span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  共偵測到 {tablesData?.tables?.length ?? 0} 個資料表
+                </p>
               </div>
-              
-              <div>
-                <Label htmlFor="database">資料庫名稱</Label>
-                <Input
-                  id="database"
-                  {...dbSwitchForm.register("database")}
-                  placeholder="例如：postgres"
-                  className="mt-1"
-                />
-              </div>
-              
-              <div>
-                <Label htmlFor="username">使用者名稱</Label>
-                <Input
-                  id="username"
-                  {...dbSwitchForm.register("username")}
-                  placeholder="例如：PostgreSQL_toufen"
-                  className="mt-1"
-                />
-              </div>
-              
-              <div>
-                <Label htmlFor="password">密碼</Label>
-                <Input
-                  id="password"
-                  type="password"
-                  {...dbSwitchForm.register("password")}
-                  placeholder="輸入資料庫密碼"
-                  className="mt-1"
-                />
-              </div>
-              
-              <div>
-                <Label htmlFor="table">主要資料表</Label>
-                <Input
-                  id="table"
-                  {...dbSwitchForm.register("table")}
-                  placeholder="例如：public.n_kc_ctl"
-                  className="mt-1"
-                />
-              </div>
-              
-              <div className="flex justify-end space-x-2 pt-4">
+
+              <div className="flex justify-end space-x-2">
                 <Button type="button" variant="outline" onClick={() => setIsDbSwitchOpen(false)}>
                   取消
                 </Button>
-                <Button type="submit" disabled={dbSwitchMutation.isPending}>
-                  {dbSwitchMutation.isPending ? "切換中..." : "切換資料庫"}
+                <Button
+                  onClick={() => selectedTable && setTableMutation.mutate(selectedTable)}
+                  disabled={!selectedTable || setTableMutation.isPending || selectedTable === dbInfo?.table}
+                >
+                  {setTableMutation.isPending ? "切換中…" : "確認切換"}
                 </Button>
               </div>
-            </form>
+
+              {/* Advanced: full connection switch */}
+              <div className="border-t border-gray-200 dark:border-gray-700 pt-3">
+                <button
+                  type="button"
+                  className="text-sm text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 flex items-center gap-1 w-full"
+                  onClick={() => setShowAdvancedSwitch(v => !v)}
+                >
+                  <span className="text-xs">{showAdvancedSwitch ? "▲" : "▼"}</span>
+                  進階：切換至其他資料庫伺服器
+                </button>
+
+                {showAdvancedSwitch && (
+                  <form onSubmit={dbSwitchForm.handleSubmit(onDbSwitchSubmit)} className="mt-3 space-y-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <Label className="text-xs">伺服器主機</Label>
+                        <Input
+                          {...dbSwitchForm.register("host")}
+                          placeholder="host.example.com"
+                          className="mt-1 text-sm h-8"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-xs">連接埠</Label>
+                        <Input
+                          {...dbSwitchForm.register("port")}
+                          placeholder="5432"
+                          className="mt-1 text-sm h-8"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <Label className="text-xs">資料庫名稱</Label>
+                      <Input
+                        {...dbSwitchForm.register("database")}
+                        placeholder="postgres"
+                        className="mt-1 text-sm h-8"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <Label className="text-xs">使用者名稱</Label>
+                        <Input
+                          {...dbSwitchForm.register("username")}
+                          placeholder="username"
+                          className="mt-1 text-sm h-8"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-xs">密碼</Label>
+                        <Input
+                          type="password"
+                          {...dbSwitchForm.register("password")}
+                          placeholder="••••••••"
+                          className="mt-1 text-sm h-8"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <Label className="text-xs">目標資料表</Label>
+                      <Input
+                        {...dbSwitchForm.register("table")}
+                        placeholder="public.n_kc_ctl"
+                        className="mt-1 text-sm h-8"
+                      />
+                    </div>
+                    <div className="flex justify-end">
+                      <Button type="submit" size="sm" disabled={dbSwitchMutation.isPending} variant="destructive">
+                        {dbSwitchMutation.isPending ? "連線中…" : "切換資料庫連線"}
+                      </Button>
+                    </div>
+                  </form>
+                )}
+              </div>
+            </div>
           </DialogContent>
         </Dialog>
       </main>

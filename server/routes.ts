@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { pool, switchDatabase, getCurrentDbInfo, type DatabaseConnection } from "./db";
+import { pool, switchDatabase, getCurrentDbInfo, setCurrentTable, type DatabaseConnection } from "./db";
 import { insertCoordinateDataSchema, insertSurveyPointSchema, surveyPointBatchUploadSchema, cadastralFileUploadSchema } from "@shared/schema";
 import type { InsertSurveyPoint, SurveyPointBatchUpload, CadastralFileUpload } from "@shared/schema";
 import { z } from "zod";
@@ -1230,6 +1230,47 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "請提供上傳者名稱" });
       }
 
+      // 確認目前連線的資料表存在
+      const currentDb = getCurrentDbInfo();
+      const targetTable = currentDb.table || "public.n_kc_ctl";
+      const [schemaCheck, tableCheck] = targetTable.includes(".")
+        ? targetTable.split(".")
+        : ["public", targetTable];
+
+      const tableExistsResult = await pool.query(
+        `SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2`,
+        [schemaCheck, tableCheck]
+      );
+      if (tableExistsResult.rows.length === 0) {
+        return res.status(400).json({
+          message: `目前連接的資料表「${targetTable}」不存在，請先在「資料庫設定」切換到有效的資料表再上傳`,
+        });
+      }
+
+      // 依資料表名稱選擇欄位方案
+      const isKdCtl = targetTable.includes("kd_ctl");
+      const isKcCt2 = targetTable.includes("kc_ct2");
+
+      // 建立 INSERT SQL
+      let insertSQL: string;
+      if (isKcCt2) {
+        insertSQL = `
+          INSERT INTO ${targetTable} (code, y, x, catacode, ps, state, geom, updatetime)
+          VALUES ($1, $2, $3, $4, $5, $6, ST_MakePoint($7, $8), NOW() AT TIME ZONE 'Asia/Taipei')
+        `;
+      } else if (isKdCtl) {
+        insertSQL = `
+          INSERT INTO ${targetTable} (ptn, "realY", "realX", corsys, lv, owner, catacode, "97y", "97x", ps, state, geom, time, "isPic")
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, ST_MakePoint($12, $13), NOW() AT TIME ZONE 'Asia/Taipei', $14)
+        `;
+      } else {
+        // n_kc_ctl（預設）
+        insertSQL = `
+          INSERT INTO ${targetTable} (ptn, realy, realx, corsys, lv, owner, catacode, "97y", "97x", ps, state, geom, timestamp, ispic)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, ST_MakePoint($12, $13), NOW() AT TIME ZONE 'Asia/Taipei', $14)
+        `;
+      }
+
       const results: Array<{filename: string, catacode: string, inserted: number, errors: string[]}> = [];
       let totalInserted = 0;
 
@@ -1247,54 +1288,130 @@ export async function registerRoutes(app: Express): Promise<Server> {
           continue;
         }
 
-        const processedData: InsertSurveyPoint[] = [];
-
+        let fileInserted = 0;
         for (const pt of rawPoints) {
           let coord97Y: string;
           let coord97X: string;
+          let geomX: number;
+          let geomY: number;
 
           if (corsys === "0") {
             // TWD67 → 轉換為 97（簡易平移）
             coord97Y = (pt.y - 204.0).toFixed(3);
             coord97X = (pt.x + 828.0).toFixed(3);
+            geomX = pt.x + 828.0;
+            geomY = pt.y - 204.0;
           } else {
             coord97Y = pt.y.toFixed(3);
             coord97X = pt.x.toFixed(3);
+            geomX = pt.x;
+            geomY = pt.y;
           }
 
-          processedData.push({
-            ptn: pt.ptn,
-            realY: pt.y.toFixed(3),
-            realX: pt.x.toFixed(3),
-            corsys: corsys as "0" | "1",
-            lv: "0",
-            owner,
-            catacode,
-            coord97Y,
-            coord97X,
-            ps: "地段批次匯入",
-            state: "?",
-          });
+          try {
+            let values: any[];
+            if (isKcCt2) {
+              values = [
+                pt.ptn,
+                pt.y.toFixed(3),
+                pt.x.toFixed(3),
+                catacode,
+                "地段批次匯入",
+                "?",
+                geomX,
+                geomY,
+              ];
+            } else {
+              values = [
+                pt.ptn,
+                pt.y.toFixed(3),
+                pt.x.toFixed(3),
+                corsys,
+                "0",
+                owner,
+                catacode,
+                coord97Y,
+                coord97X,
+                "地段批次匯入",
+                "?",
+                geomX,
+                geomY,
+                false,
+              ];
+            }
+            await pool.query(insertSQL, values);
+            fileInserted++;
+          } catch (err) {
+            errors.push(`點號 ${pt.ptn}：${err instanceof Error ? err.message : '寫入失敗'}`);
+          }
         }
 
-        try {
-          const insertResult = await storage.batchCreateSurveyPoints(processedData);
-          totalInserted += insertResult.length;
-          results.push({ filename, catacode, inserted: insertResult.length, errors });
-        } catch (err) {
-          results.push({ filename, catacode, inserted: 0, errors: [err instanceof Error ? err.message : '寫入失敗'] });
-        }
+        totalInserted += fileInserted;
+        results.push({ filename, catacode, inserted: fileInserted, errors });
       }
 
       res.status(201).json({
-        message: `批次處理完成，共寫入 ${totalInserted} 筆圖根點資料（${files.length} 個地段）`,
+        message: `批次處理完成，共寫入 ${totalInserted} 筆圖根點資料（${files.length} 個地段）至 ${targetTable}`,
         totalInserted,
+        targetTable,
         results,
       });
     } catch (error) {
       console.error("Error in CTL batch upload:", error);
       res.status(500).json({
         message: "無法批次寫入圖根點資料",
+        error: error instanceof Error ? error.message : "未知錯誤",
+      });
+    }
+  });
+
+  // 列出所有資料表（輕量版，供切換下拉選單使用）
+  app.get("/api/database/list-tables", async (req, res) => {
+    try {
+      const result = await pool.query(`
+        SELECT table_schema, table_name,
+               table_schema || '.' || table_name AS full_name
+        FROM information_schema.tables
+        WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
+          AND table_type = 'BASE TABLE'
+        ORDER BY table_schema, table_name
+      `);
+      res.json({ tables: result.rows.map(r => ({
+        schema: r.table_schema,
+        table: r.table_name,
+        fullName: r.full_name,
+      })) });
+    } catch (error) {
+      res.status(500).json({
+        message: "無法列出資料表",
+        error: error instanceof Error ? error.message : "未知錯誤",
+      });
+    }
+  });
+
+  // 只切換操作資料表（不重新連線）
+  app.post("/api/database/set-table", async (req, res) => {
+    try {
+      const { table } = req.body;
+      if (!table) return res.status(400).json({ message: "請指定資料表名稱" });
+
+      const [schemaName, tblName] = table.includes(".")
+        ? table.split(".")
+        : ["public", table];
+
+      const exists = await pool.query(
+        `SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2`,
+        [schemaName, tblName]
+      );
+      if (exists.rows.length === 0) {
+        return res.status(404).json({ message: `資料表「${table}」不存在` });
+      }
+
+      setCurrentTable(table);
+      res.json({ message: `已切換至資料表 ${table}`, table, dbInfo: getCurrentDbInfo() });
+    } catch (error) {
+      res.status(500).json({
+        message: "切換資料表失敗",
         error: error instanceof Error ? error.message : "未知錯誤",
       });
     }

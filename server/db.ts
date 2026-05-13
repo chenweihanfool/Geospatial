@@ -142,3 +142,8 @@ export async function switchDatabase(dbInfo: DatabaseConnection) {
 export function getCurrentDbInfo() {
   return currentDbInfo;
 }
+
+// Function to switch only the target table (no reconnection needed)
+export function setCurrentTable(table: string) {
+  currentDbInfo = { ...currentDbInfo, table };
+}
