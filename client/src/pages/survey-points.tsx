@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import * as React from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -260,31 +260,77 @@ export default function SurveyPoints() {
   
   const { register: batchRegister, handleSubmit: batchHandleSubmit, formState: { errors: batchErrors }, watch: batchWatch } = batchForm;
 
-  // Section batch upload form
-  const sectionBatchForm = useForm({
-    defaultValues: {
-      catacode: "",
-      corsys: "1",
-      lv: "0",
-      owner: "",
-      file: "",
-    },
-  });
+  // CTL 地段批次上傳
+  interface CTLFile { filename: string; content: string; pointCount: number; catacode: string; }
+  const [ctlFiles, setCtlFiles] = useState<CTLFile[]>([]);
+  const [ctlCorsys, setCtlCorsys] = useState<string>("1");
+  const [ctlOwner, setCtlOwner] = useState<string>("system");
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const sectionBatchMutation = useMutation({
-    mutationFn: async (data: any) => {
-      return apiRequest({ method: "POST", url: "/api/survey-points/batch-section", data });
+  function parseCTLContent(content: string): number {
+    const lines = content.split('\n');
+    let count = 0;
+    let isFirst = true;
+    for (const line of lines) {
+      if (line.trim() === '') continue;
+      if (isFirst) { isFirst = false; continue; }
+      if (line.length < 19) continue;
+      const ptn = line.substring(0, 8).trim();
+      const y = parseFloat(line.substring(8, 19).trim());
+      const x = parseFloat(line.substring(19, 29).trim());
+      if (ptn && !isNaN(y) && !isNaN(x)) count++;
+    }
+    return count;
+  }
+
+  const readCTLFiles = useCallback((fileList: FileList | File[]) => {
+    const filesArray = Array.from(fileList);
+    filesArray.forEach(file => {
+      if (!file.name.toUpperCase().endsWith('.CTL')) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const content = e.target?.result as string;
+        const catacode = file.name.replace(/\.[^.]+$/, '').toUpperCase();
+        const pointCount = parseCTLContent(content);
+        setCtlFiles(prev => {
+          if (prev.some(f => f.filename === file.name)) return prev;
+          return [...prev, { filename: file.name, content, pointCount, catacode }];
+        });
+      };
+      reader.readAsText(file, 'utf-8');
+    });
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDragging(false);
+    readCTLFiles(e.dataTransfer.files);
+  }, [readCTLFiles]);
+
+  const [ctlUploadResult, setCtlUploadResult] = useState<any>(null);
+
+  const ctlMutation = useMutation({
+    mutationFn: async () => {
+      return apiRequest({
+        method: "POST",
+        url: "/api/survey-points/batch-ctl",
+        data: {
+          files: ctlFiles.map(f => ({ filename: f.filename, content: f.content })),
+          corsys: ctlCorsys,
+          owner: ctlOwner,
+        },
+      });
     },
     onSuccess: (result) => {
-      toast({ title: "成功", description: result.message || "地段批次上傳成功" });
-      sectionBatchForm.reset();
+      toast({ title: "上傳成功", description: result.message });
+      setCtlUploadResult(result);
+      setCtlFiles([]);
       queryClient.invalidateQueries({ queryKey: ["/api/survey-points/count"] });
-      if (isViewDialogOpen) {
-        queryClient.invalidateQueries({ queryKey: ["/api/survey-points"] });
-      }
+      if (isViewDialogOpen) queryClient.invalidateQueries({ queryKey: ["/api/survey-points"] });
     },
     onError: (error: any) => {
-      toast({ title: "錯誤", description: error.message || "地段批次上傳時發生錯誤", variant: "destructive" });
+      toast({ title: "上傳失敗", description: error.message || "發生錯誤", variant: "destructive" });
     },
   });
 
@@ -773,95 +819,192 @@ export default function SurveyPoints() {
           </CardContent>
         </Card>
 
-        {/* Section Batch Upload */}
+        {/* CTL 地段批次上傳 */}
         <Card className="bg-white dark:bg-gray-800 shadow-md border border-gray-200 dark:border-gray-700 mt-8">
           <CardHeader className="bg-purple-600 text-white">
             <CardTitle className="text-lg font-medium flex items-center">
               <Layers className="mr-2 h-5 w-5" />
-              地段批次上傳圖根點
+              CTL 地段批次上傳圖根點
             </CardTitle>
             <p className="text-purple-100 dark:text-purple-200 text-sm mt-1">
-              上傳整個地段的圖根點，格式：點名 公告Y 公告X [備註] [狀態]（段代碼統一設定）
+              拖曳或選擇多個 CTL 檔案，系統自動解析並寫入資料庫（段代碼取自檔名）
             </p>
           </CardHeader>
-          <CardContent className="p-6">
-            <form
-              onSubmit={sectionBatchForm.handleSubmit((data) => sectionBatchMutation.mutate(data))}
-              className="space-y-6"
-            >
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div>
-                  <Label htmlFor="sb-catacode">段代碼</Label>
-                  <Input
-                    id="sb-catacode"
-                    {...sectionBatchForm.register("catacode")}
-                    placeholder="例如：KC0308"
-                    className="mt-1"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="sb-corsys">座標系統</Label>
-                  <Select
-                    defaultValue="1"
-                    onValueChange={(v) => sectionBatchForm.setValue("corsys", v)}
-                  >
-                    <SelectTrigger className="mt-1">
-                      <SelectValue placeholder="選擇座標系統" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="1">TWD97</SelectItem>
-                      <SelectItem value="0">TWD67（自動轉換）</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label htmlFor="sb-lv">階層</Label>
-                  <Input
-                    id="sb-lv"
-                    {...sectionBatchForm.register("lv")}
-                    placeholder="例如：0"
-                    className="mt-1"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="sb-owner">上傳者</Label>
-                  <Input
-                    id="sb-owner"
-                    {...sectionBatchForm.register("owner")}
-                    placeholder="例如：system"
-                    className="mt-1"
-                  />
-                </div>
-              </div>
-
+          <CardContent className="p-6 space-y-6">
+            {/* 設定列 */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <Label htmlFor="sb-file">點位資料</Label>
-                <Textarea
-                  id="sb-file"
-                  {...sectionBatchForm.register("file")}
-                  placeholder={"範例：\nBDD348 2709882.555 216522.990\nBDD349 2709900.123 216530.456 現場確認 0\nBDD350 2709910.000 216540.000 備註 ?"}
-                  className="mt-1 font-mono text-sm"
-                  rows={6}
+                <Label htmlFor="ctl-corsys">座標系統</Label>
+                <Select value={ctlCorsys} onValueChange={setCtlCorsys}>
+                  <SelectTrigger id="ctl-corsys" className="mt-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="1">TWD97（直接使用）</SelectItem>
+                    <SelectItem value="0">TWD67（自動轉換為 TWD97）</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label htmlFor="ctl-owner">上傳者</Label>
+                <Input
+                  id="ctl-owner"
+                  value={ctlOwner}
+                  onChange={e => setCtlOwner(e.target.value)}
+                  placeholder="例如：system"
+                  className="mt-1"
                 />
               </div>
+            </div>
 
-              <div className="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-4">
-                <h4 className="text-sm font-medium text-purple-800 dark:text-purple-200 mb-2">格式說明</h4>
-                <div className="text-xs text-purple-700 dark:text-purple-300 space-y-1">
-                  <div>• 每行 3～5 個參數，以空白分隔</div>
-                  <div>• 格式：點名 公告Y 公告X [備註] [狀態]</div>
-                  <div>• 備註、狀態可省略（預設備註為「地段批次匯入」，狀態為「?」）</div>
-                  <div>• 段代碼、座標系統、階層、上傳者統一套用至整個地段所有點位</div>
-                  <div>• TWD67 座標系統時，系統自動計算 TWD97 座標</div>
+            {/* 拖曳區 */}
+            <div
+              onDragOver={e => { e.preventDefault(); setIsDragging(true); }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={handleDrop}
+              onClick={() => fileInputRef.current?.click()}
+              className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
+                isDragging
+                  ? "border-purple-500 bg-purple-50 dark:bg-purple-900/20"
+                  : "border-gray-300 dark:border-gray-600 hover:border-purple-400 hover:bg-purple-50/50 dark:hover:bg-purple-900/10"
+              }`}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".CTL,.ctl"
+                multiple
+                className="hidden"
+                onChange={e => e.target.files && readCTLFiles(e.target.files)}
+              />
+              <Upload className="h-10 w-10 mx-auto mb-3 text-purple-400" />
+              <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                拖曳 CTL 檔案至此，或點擊選擇檔案
+              </p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                支援同時選取多個 CTL 檔案，段代碼自動取自檔名（不含副檔名）
+              </p>
+            </div>
+
+            {/* 已載入檔案列表 */}
+            {ctlFiles.length > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    已載入 {ctlFiles.length} 個地段，共 {ctlFiles.reduce((s, f) => s + f.pointCount, 0)} 筆點位
+                  </p>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-red-500 hover:text-red-700 text-xs"
+                    onClick={() => setCtlFiles([])}
+                  >
+                    <Trash2 className="h-3 w-3 mr-1" />
+                    清除全部
+                  </Button>
+                </div>
+                <div className="border rounded-lg overflow-hidden">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>檔案名稱</TableHead>
+                        <TableHead>段代碼</TableHead>
+                        <TableHead className="text-right">點位數</TableHead>
+                        <TableHead className="text-center">移除</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {ctlFiles.map(f => (
+                        <TableRow key={f.filename}>
+                          <TableCell className="font-mono text-sm">{f.filename}</TableCell>
+                          <TableCell>
+                            <Badge variant="outline">{f.catacode}</Badge>
+                          </TableCell>
+                          <TableCell className="text-right font-semibold">{f.pointCount}</TableCell>
+                          <TableCell className="text-center">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="text-red-500 hover:text-red-700 h-6 w-6 p-0"
+                              onClick={() => setCtlFiles(prev => prev.filter(x => x.filename !== f.filename))}
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
                 </div>
               </div>
+            )}
 
-              <div className="flex justify-end">
-                <Button type="submit" disabled={sectionBatchMutation.isPending} className="bg-purple-600 hover:bg-purple-700">
-                  {sectionBatchMutation.isPending ? "上傳中..." : "批次上傳地段"}
-                </Button>
+            {/* CTL 格式說明 */}
+            <div className="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-4">
+              <h4 className="text-sm font-medium text-purple-800 dark:text-purple-200 mb-2">CTL 檔案格式說明</h4>
+              <div className="text-xs text-purple-700 dark:text-purple-300 space-y-1 font-mono">
+                <div>第 1 行：標頭（自動跳過，例如 KDK110000000）</div>
+                <div>第 2 行起：[點名, 8字元] [N/Y值, 11字元] [E/X值, 10字元]</div>
+                <div className="mt-1 text-purple-600 dark:text-purple-400">
+                  BA01    2726503.618236890.394
+                </div>
               </div>
-            </form>
+              <div className="text-xs text-purple-600 dark:text-purple-400 mt-2 space-y-1">
+                <div>• 段代碼 = CTL 檔名去副檔名（如 KD0517.CTL → KD0517）</div>
+                <div>• 預設值：備註「地段批次匯入」、狀態「?」、階層 0</div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div />
+              <Button
+                onClick={() => { setCtlUploadResult(null); ctlMutation.mutate(); }}
+                disabled={ctlFiles.length === 0 || ctlMutation.isPending || !ctlOwner}
+                className="bg-purple-600 hover:bg-purple-700"
+              >
+                {ctlMutation.isPending ? "寫入中..." : `寫入資料庫（${ctlFiles.length} 個地段）`}
+              </Button>
+            </div>
+
+            {/* 上傳結果 */}
+            {ctlUploadResult && (
+              <div className="border border-green-200 dark:border-green-800 rounded-lg overflow-hidden">
+                <div className="bg-green-50 dark:bg-green-900/20 px-4 py-2 flex items-center space-x-2">
+                  <CheckCircle className="h-4 w-4 text-green-600" />
+                  <span className="text-sm font-medium text-green-800 dark:text-green-200">
+                    {ctlUploadResult.message}
+                  </span>
+                </div>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>地段 (CTL 檔)</TableHead>
+                      <TableHead>段代碼</TableHead>
+                      <TableHead className="text-right">寫入筆數</TableHead>
+                      <TableHead>狀態</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {ctlUploadResult.results?.map((r: any) => (
+                      <TableRow key={r.filename}>
+                        <TableCell className="font-mono text-sm">{r.filename}</TableCell>
+                        <TableCell><Badge variant="outline">{r.catacode}</Badge></TableCell>
+                        <TableCell className="text-right font-semibold">{r.inserted}</TableCell>
+                        <TableCell>
+                          {r.errors?.length > 0 ? (
+                            <span className="text-red-500 text-xs">{r.errors.join('; ')}</span>
+                          ) : (
+                            <span className="text-green-600 text-xs flex items-center">
+                              <CheckCircle className="h-3 w-3 mr-1" />成功
+                            </span>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
           </CardContent>
         </Card>
 

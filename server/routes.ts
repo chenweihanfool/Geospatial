@@ -1183,91 +1183,116 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // ====== 地段批次上傳 (Section Batch Upload) ======
-  app.post("/api/survey-points/batch-section", async (req, res) => {
+  // ====== CTL 地段批次上傳 ======
+  // CTL 格式：第1行為標頭（跳過），後續每行固定欄位
+  //   位置 0-7：點名（8字元，空白補齊）
+  //   位置 8-18：N(Y) 值（11字元，含小數點，取小數3位）
+  //   位置 19-28：E(X) 值（10字元，含小數點，取小數3位）
+  //   段代碼 = CTL 檔名（不含副檔名）
+  function parseCTLContent(content: string): Array<{ptn: string, y: number, x: number}> {
+    const lines = content.split('\n');
+    const points: Array<{ptn: string, y: number, x: number}> = [];
+    let isFirst = true;
+
+    for (const line of lines) {
+      if (line.trim() === '') continue;
+      if (isFirst) { isFirst = false; continue; } // 跳過標頭行
+
+      if (line.length < 19) continue;
+
+      const ptn = line.substring(0, 8).trim();
+      const yStr = line.substring(8, 19).trim();
+      const xStr = line.substring(19, 29).trim();
+
+      if (!ptn) continue;
+      const y = parseFloat(yStr);
+      const x = parseFloat(xStr);
+      if (isNaN(y) || isNaN(x)) continue;
+
+      points.push({ ptn, y, x });
+    }
+
+    return points;
+  }
+
+  app.post("/api/survey-points/batch-ctl", async (req, res) => {
     try {
-      const { catacode, corsys, lv, owner, file } = req.body;
+      // files: [{filename: string, content: string}]
+      const { files, corsys, owner } = req.body;
 
-      if (!catacode || !corsys || !lv || !owner || !file) {
-        return res.status(400).json({ message: "請提供段代碼、座標系統、階層、上傳者及檔案內容" });
+      if (!files || !Array.isArray(files) || files.length === 0) {
+        return res.status(400).json({ message: "請提供至少一個 CTL 檔案" });
       }
-
       if (corsys !== "0" && corsys !== "1") {
-        return res.status(400).json({ message: "座標系統必須是 0（67系統）或 1（97系統）" });
+        return res.status(400).json({ message: "座標系統必須是 0（TWD67）或 1（TWD97）" });
+      }
+      if (!owner) {
+        return res.status(400).json({ message: "請提供上傳者名稱" });
       }
 
-      const lines = (file as string).trim().split('\n').filter((l: string) => l.trim());
-      if (lines.length === 0) {
-        return res.status(400).json({ message: "檔案內容為空" });
-      }
+      const results: Array<{filename: string, catacode: string, inserted: number, errors: string[]}> = [];
+      let totalInserted = 0;
 
-      const currentDb = getCurrentDbInfo();
-      const tableName = currentDb.table || "public.n_kc_ctl";
-      const processedData: InsertSurveyPoint[] = [];
-      const errors: string[] = [];
+      for (const fileItem of files) {
+        const { filename, content } = fileItem;
+        if (!filename || !content) continue;
 
-      lines.forEach((line: string, index: number) => {
-        const parts = line.trim().split(/\s+/);
-        if (parts.length < 3) {
-          errors.push(`第 ${index + 1} 行：欄位不足，需要至少 3 個欄位（點名 公告Y 公告X）`);
-          return;
+        // 段代碼 = 檔名去副檔名
+        const catacode = filename.replace(/\.[^.]+$/, '').toUpperCase();
+        const errors: string[] = [];
+
+        const rawPoints = parseCTLContent(content);
+        if (rawPoints.length === 0) {
+          results.push({ filename, catacode, inserted: 0, errors: ['無法解析到有效資料'] });
+          continue;
         }
 
-        const [ptn, realY, realX, ps = "地段批次匯入", state = "?"] = parts;
+        const processedData: InsertSurveyPoint[] = [];
 
-        if (isNaN(parseFloat(realY)) || isNaN(parseFloat(realX))) {
-          errors.push(`第 ${index + 1} 行：座標格式錯誤`);
-          return;
+        for (const pt of rawPoints) {
+          let coord97Y: string;
+          let coord97X: string;
+
+          if (corsys === "0") {
+            // TWD67 → 轉換為 97（簡易平移）
+            coord97Y = (pt.y - 204.0).toFixed(3);
+            coord97X = (pt.x + 828.0).toFixed(3);
+          } else {
+            coord97Y = pt.y.toFixed(3);
+            coord97X = pt.x.toFixed(3);
+          }
+
+          processedData.push({
+            ptn: pt.ptn,
+            realY: pt.y.toFixed(3),
+            realX: pt.x.toFixed(3),
+            corsys: corsys as "0" | "1",
+            lv: "0",
+            owner,
+            catacode,
+            coord97Y,
+            coord97X,
+            ps: "地段批次匯入",
+            state: "?",
+          });
         }
 
-        let coord97Y: string;
-        let coord97X: string;
-
-        if (corsys === "0") {
-          // TWD67 → 轉換為97
-          const realYNum = parseFloat(realY);
-          const realXNum = parseFloat(realX);
-          const dx = 828.0;
-          const dy = -204.0;
-          coord97Y = (realYNum + dy).toFixed(3);
-          coord97X = (realXNum + dx).toFixed(3);
-        } else {
-          // TWD97 → 直接使用
-          coord97Y = parseFloat(realY).toFixed(3);
-          coord97X = parseFloat(realX).toFixed(3);
+        try {
+          const insertResult = await storage.batchCreateSurveyPoints(processedData);
+          totalInserted += insertResult.length;
+          results.push({ filename, catacode, inserted: insertResult.length, errors });
+        } catch (err) {
+          results.push({ filename, catacode, inserted: 0, errors: [err instanceof Error ? err.message : '寫入失敗'] });
         }
-
-        processedData.push({
-          ptn,
-          realY: parseFloat(realY).toFixed(3),
-          realX: parseFloat(realX).toFixed(3),
-          corsys: corsys as "0" | "1",
-          lv: String(lv),
-          owner,
-          catacode,
-          coord97Y,
-          coord97X,
-          ps,
-          state,
-        });
-      });
-
-      if (errors.length > 0) {
-        return res.status(400).json({ message: "檔案解析錯誤", errors });
       }
 
-      if (processedData.length === 0) {
-        return res.status(400).json({ message: "沒有有效的資料可以處理" });
-      }
-
-      const insertResult = await storage.batchCreateSurveyPoints(processedData);
       res.status(201).json({
-        message: `成功批次寫入 ${insertResult.length} 筆圖根點資料（地段：${catacode}）`,
-        count: insertResult.length,
-        data: insertResult,
+        message: `批次處理完成，共寫入 ${totalInserted} 筆圖根點資料（${files.length} 個地段）`,
+        totalInserted,
+        results,
       });
     } catch (error) {
-      console.error("Error in section batch upload:", error);
+      console.error("Error in CTL batch upload:", error);
       res.status(500).json({
         message: "無法批次寫入圖根點資料",
         error: error instanceof Error ? error.message : "未知錯誤",
