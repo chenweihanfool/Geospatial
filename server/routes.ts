@@ -8,6 +8,13 @@ import { z } from "zod";
 import { parseCadastralFiles, type ParsedCadastralData } from "./cadastralParser";
 import { generateShpFromCadastralData } from "./shpGenerator";
 import { transformTWD67toTWD97, transformCoordinates } from "./coordinateTransform";
+import * as fs from "fs";
+import * as path from "path";
+
+const BACKUP_DIR = path.join(process.cwd(), "backups");
+if (!fs.existsSync(BACKUP_DIR)) {
+  fs.mkdirSync(BACKUP_DIR, { recursive: true });
+}
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Get coordinate data count
@@ -1173,6 +1180,435 @@ export async function registerRoutes(app: Express): Promise<Server> {
           error: error instanceof Error ? error.message : "未知錯誤"
         });
       }
+    }
+  });
+
+  // ====== 地段批次上傳 (Section Batch Upload) ======
+  app.post("/api/survey-points/batch-section", async (req, res) => {
+    try {
+      const { catacode, corsys, lv, owner, file } = req.body;
+
+      if (!catacode || !corsys || !lv || !owner || !file) {
+        return res.status(400).json({ message: "請提供段代碼、座標系統、階層、上傳者及檔案內容" });
+      }
+
+      if (corsys !== "0" && corsys !== "1") {
+        return res.status(400).json({ message: "座標系統必須是 0（67系統）或 1（97系統）" });
+      }
+
+      const lines = (file as string).trim().split('\n').filter((l: string) => l.trim());
+      if (lines.length === 0) {
+        return res.status(400).json({ message: "檔案內容為空" });
+      }
+
+      const currentDb = getCurrentDbInfo();
+      const tableName = currentDb.table || "public.n_kc_ctl";
+      const processedData: InsertSurveyPoint[] = [];
+      const errors: string[] = [];
+
+      lines.forEach((line: string, index: number) => {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length < 3) {
+          errors.push(`第 ${index + 1} 行：欄位不足，需要至少 3 個欄位（點名 公告Y 公告X）`);
+          return;
+        }
+
+        const [ptn, realY, realX, ps = "地段批次匯入", state = "?"] = parts;
+
+        if (isNaN(parseFloat(realY)) || isNaN(parseFloat(realX))) {
+          errors.push(`第 ${index + 1} 行：座標格式錯誤`);
+          return;
+        }
+
+        let coord97Y: string;
+        let coord97X: string;
+
+        if (corsys === "0") {
+          // TWD67 → 轉換為97
+          const realYNum = parseFloat(realY);
+          const realXNum = parseFloat(realX);
+          const dx = 828.0;
+          const dy = -204.0;
+          coord97Y = (realYNum + dy).toFixed(3);
+          coord97X = (realXNum + dx).toFixed(3);
+        } else {
+          // TWD97 → 直接使用
+          coord97Y = parseFloat(realY).toFixed(3);
+          coord97X = parseFloat(realX).toFixed(3);
+        }
+
+        processedData.push({
+          ptn,
+          realY: parseFloat(realY).toFixed(3),
+          realX: parseFloat(realX).toFixed(3),
+          corsys: corsys as "0" | "1",
+          lv: String(lv),
+          owner,
+          catacode,
+          coord97Y,
+          coord97X,
+          ps,
+          state,
+        });
+      });
+
+      if (errors.length > 0) {
+        return res.status(400).json({ message: "檔案解析錯誤", errors });
+      }
+
+      if (processedData.length === 0) {
+        return res.status(400).json({ message: "沒有有效的資料可以處理" });
+      }
+
+      const insertResult = await storage.batchCreateSurveyPoints(processedData);
+      res.status(201).json({
+        message: `成功批次寫入 ${insertResult.length} 筆圖根點資料（地段：${catacode}）`,
+        count: insertResult.length,
+        data: insertResult,
+      });
+    } catch (error) {
+      console.error("Error in section batch upload:", error);
+      res.status(500).json({
+        message: "無法批次寫入圖根點資料",
+        error: error instanceof Error ? error.message : "未知錯誤",
+      });
+    }
+  });
+
+  // ====== 資料庫管理 API ======
+
+  // 列出所有資料表及筆數
+  app.get("/api/database/tables", async (req, res) => {
+    try {
+      const tablesResult = await pool.query(`
+        SELECT table_name, table_schema
+        FROM information_schema.tables
+        WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
+          AND table_type = 'BASE TABLE'
+        ORDER BY table_schema, table_name
+      `);
+
+      const tables = await Promise.all(
+        tablesResult.rows.map(async (row) => {
+          try {
+            const countResult = await pool.query(
+              `SELECT COUNT(*) as count FROM "${row.table_schema}"."${row.table_name}"`
+            );
+            const colResult = await pool.query(`
+              SELECT COUNT(*) as count
+              FROM information_schema.columns
+              WHERE table_schema = $1 AND table_name = $2
+            `, [row.table_schema, row.table_name]);
+            return {
+              tableName: row.table_name,
+              schemaName: row.table_schema,
+              fullName: `${row.table_schema}.${row.table_name}`,
+              rowCount: parseInt(countResult.rows[0].count),
+              columnCount: parseInt(colResult.rows[0].count),
+            };
+          } catch {
+            return {
+              tableName: row.table_name,
+              schemaName: row.table_schema,
+              fullName: `${row.table_schema}.${row.table_name}`,
+              rowCount: -1,
+              columnCount: 0,
+            };
+          }
+        })
+      );
+
+      const dbResult = await pool.query("SELECT current_database(), version()");
+      res.json({
+        database: dbResult.rows[0].current_database,
+        version: dbResult.rows[0].version,
+        tables,
+      });
+    } catch (error) {
+      console.error("Error listing tables:", error);
+      res.status(500).json({
+        message: "無法列出資料表",
+        error: error instanceof Error ? error.message : "未知錯誤",
+      });
+    }
+  });
+
+  // 建立資料表備份
+  app.post("/api/database/backup", async (req, res) => {
+    try {
+      const { tableName } = req.body;
+      if (!tableName) {
+        return res.status(400).json({ message: "請指定要備份的資料表名稱" });
+      }
+
+      // 驗證資料表是否存在
+      const [schemaName, tblName] = tableName.includes(".")
+        ? tableName.split(".")
+        : ["public", tableName];
+
+      const existsResult = await pool.query(`
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = $1 AND table_name = $2
+      `, [schemaName, tblName]);
+
+      if (existsResult.rows.length === 0) {
+        return res.status(404).json({ message: `資料表 ${tableName} 不存在` });
+      }
+
+      // 取得欄位資訊（排除 geom，改用 WKT）
+      const colsResult = await pool.query(`
+        SELECT column_name, data_type
+        FROM information_schema.columns
+        WHERE table_schema = $1 AND table_name = $2
+        ORDER BY ordinal_position
+      `, [schemaName, tblName]);
+
+      const columns = colsResult.rows;
+      const selectExprs = columns.map(col => {
+        if (col.data_type === 'USER-DEFINED') {
+          return `ST_AsText("${col.column_name}") AS "${col.column_name}"`;
+        }
+        return `"${col.column_name}"`;
+      });
+
+      const dataResult = await pool.query(
+        `SELECT ${selectExprs.join(", ")} FROM "${schemaName}"."${tblName}"`
+      );
+
+      const now = new Date();
+      const timestamp = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const filename = `${schemaName}__${tblName}__${timestamp}.json`;
+      const filepath = path.join(BACKUP_DIR, filename);
+
+      const backup = {
+        metadata: {
+          tableName: tblName,
+          schemaName,
+          fullTableName: tableName,
+          createdAt: now.toISOString(),
+          rowCount: dataResult.rows.length,
+          columns: columns.map(c => ({ name: c.column_name, type: c.data_type })),
+        },
+        data: dataResult.rows,
+      };
+
+      fs.writeFileSync(filepath, JSON.stringify(backup, null, 2), "utf-8");
+
+      res.json({
+        message: `成功備份資料表 ${tableName}，共 ${dataResult.rows.length} 筆資料`,
+        filename,
+        rowCount: dataResult.rows.length,
+        createdAt: now.toISOString(),
+      });
+    } catch (error) {
+      console.error("Error creating backup:", error);
+      res.status(500).json({
+        message: "備份失敗",
+        error: error instanceof Error ? error.message : "未知錯誤",
+      });
+    }
+  });
+
+  // 列出所有備份
+  app.get("/api/database/backups", async (req, res) => {
+    try {
+      if (!fs.existsSync(BACKUP_DIR)) {
+        return res.json({ backups: [] });
+      }
+
+      const files = fs.readdirSync(BACKUP_DIR)
+        .filter(f => f.endsWith(".json"))
+        .map(filename => {
+          try {
+            const filepath = path.join(BACKUP_DIR, filename);
+            const stat = fs.statSync(filepath);
+            const content = JSON.parse(fs.readFileSync(filepath, "utf-8"));
+            return {
+              filename,
+              tableName: content.metadata?.fullTableName || filename,
+              createdAt: content.metadata?.createdAt || stat.mtime.toISOString(),
+              rowCount: content.metadata?.rowCount ?? 0,
+              fileSize: stat.size,
+            };
+          } catch {
+            return null;
+          }
+        })
+        .filter(Boolean)
+        .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+      res.json({ backups: files });
+    } catch (error) {
+      console.error("Error listing backups:", error);
+      res.status(500).json({
+        message: "無法列出備份",
+        error: error instanceof Error ? error.message : "未知錯誤",
+      });
+    }
+  });
+
+  // 下載備份檔案
+  app.get("/api/database/backups/:filename/download", (req, res) => {
+    try {
+      const { filename } = req.params;
+      if (filename.includes("..") || filename.includes("/")) {
+        return res.status(400).json({ message: "無效的檔名" });
+      }
+
+      const filepath = path.join(BACKUP_DIR, filename);
+      if (!fs.existsSync(filepath)) {
+        return res.status(404).json({ message: "備份檔案不存在" });
+      }
+
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.sendFile(filepath);
+    } catch (error) {
+      res.status(500).json({
+        message: "下載失敗",
+        error: error instanceof Error ? error.message : "未知錯誤",
+      });
+    }
+  });
+
+  // 刪除備份
+  app.delete("/api/database/backups/:filename", (req, res) => {
+    try {
+      const { filename } = req.params;
+      if (filename.includes("..") || filename.includes("/")) {
+        return res.status(400).json({ message: "無效的檔名" });
+      }
+
+      const filepath = path.join(BACKUP_DIR, filename);
+      if (!fs.existsSync(filepath)) {
+        return res.status(404).json({ message: "備份檔案不存在" });
+      }
+
+      fs.unlinkSync(filepath);
+      res.json({ message: "備份已刪除", filename });
+    } catch (error) {
+      res.status(500).json({
+        message: "刪除備份失敗",
+        error: error instanceof Error ? error.message : "未知錯誤",
+      });
+    }
+  });
+
+  // 還原資料表
+  app.post("/api/database/restore", async (req, res) => {
+    try {
+      const { filename } = req.body;
+      if (!filename || filename.includes("..") || filename.includes("/")) {
+        return res.status(400).json({ message: "請指定有效的備份檔案名稱" });
+      }
+
+      const filepath = path.join(BACKUP_DIR, filename);
+      if (!fs.existsSync(filepath)) {
+        return res.status(404).json({ message: "備份檔案不存在" });
+      }
+
+      const backup = JSON.parse(fs.readFileSync(filepath, "utf-8"));
+      const { metadata, data } = backup;
+
+      if (!metadata || !data) {
+        return res.status(400).json({ message: "備份檔案格式錯誤" });
+      }
+
+      const { schemaName, tableName } = metadata;
+
+      // 驗證資料表是否存在
+      const existsResult = await pool.query(`
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = $1 AND table_name = $2
+      `, [schemaName, tableName]);
+
+      if (existsResult.rows.length === 0) {
+        return res.status(404).json({ message: `目標資料表 ${metadata.fullTableName} 不存在` });
+      }
+
+      // 取得目前資料表欄位（用於構建 INSERT）
+      const colsResult = await pool.query(`
+        SELECT column_name, data_type, column_default, is_nullable
+        FROM information_schema.columns
+        WHERE table_schema = $1 AND table_name = $2
+        ORDER BY ordinal_position
+      `, [schemaName, tableName]);
+
+      const tableColumns = colsResult.rows;
+
+      // 清空資料表
+      await pool.query(`TRUNCATE TABLE "${schemaName}"."${tableName}" RESTART IDENTITY CASCADE`);
+
+      if (data.length === 0) {
+        return res.json({ message: `還原完成，資料表已清空（備份中無資料）`, rowCount: 0 });
+      }
+
+      // 逐筆插入（跳過自動生成的 id，讓 DB 自動產生）
+      const geomColumns = tableColumns
+        .filter(c => c.data_type === 'USER-DEFINED')
+        .map(c => c.column_name);
+
+      const insertableColumns = tableColumns.filter(c => {
+        // 跳過 GENERATED ALWAYS AS IDENTITY
+        const hasDefault = c.column_default?.includes('nextval') || c.column_default?.includes('generated');
+        return !(hasDefault && c.column_name === 'id');
+      });
+
+      let inserted = 0;
+      for (const row of data) {
+        const cols: string[] = [];
+        const vals: any[] = [];
+        const placeholders: string[] = [];
+        let paramIdx = 1;
+
+        for (const col of insertableColumns) {
+          if (col.column_name === 'id') continue;
+          if (row[col.column_name] === undefined || row[col.column_name] === null) {
+            if (col.is_nullable === 'YES') continue;
+          }
+
+          cols.push(`"${col.column_name}"`);
+          if (geomColumns.includes(col.column_name)) {
+            // 使用 WKT 還原 geometry
+            if (row[col.column_name]) {
+              placeholders.push(`ST_GeomFromText($${paramIdx}, 3826)`);
+              vals.push(row[col.column_name]);
+              paramIdx++;
+            } else {
+              placeholders.push('NULL');
+            }
+          } else {
+            placeholders.push(`$${paramIdx}`);
+            vals.push(row[col.column_name]);
+            paramIdx++;
+          }
+        }
+
+        if (cols.length === 0) continue;
+
+        try {
+          await pool.query(
+            `INSERT INTO "${schemaName}"."${tableName}" (${cols.join(", ")}) VALUES (${placeholders.join(", ")})`,
+            vals
+          );
+          inserted++;
+        } catch (err) {
+          console.error(`Row insert error:`, err);
+        }
+      }
+
+      res.json({
+        message: `成功還原資料表 ${metadata.fullTableName}，共插入 ${inserted} 筆資料`,
+        rowCount: inserted,
+        source: filename,
+        restoredAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      console.error("Error restoring backup:", error);
+      res.status(500).json({
+        message: "還原失敗",
+        error: error instanceof Error ? error.message : "未知錯誤",
+      });
     }
   });
 

@@ -8,6 +8,7 @@ import Home from "@/pages/home";
 import SurveyPoints from "@/pages/survey-points";
 import CadastralData from "@/pages/cadastral";
 import SpatialQuery from "@/pages/spatial-query";
+import DatabaseManagement from "@/pages/database-management";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -17,6 +18,7 @@ function Router() {
       <Route path="/survey-points" component={SurveyPoints} />
       <Route path="/cadastral" component={CadastralData} />
       <Route path="/spatial-query" component={SpatialQuery} />
+      <Route path="/database-management" component={DatabaseManagement} />
       <Route component={NotFound} />
     </Switch>
   );

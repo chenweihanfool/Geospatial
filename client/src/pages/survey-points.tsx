@@ -17,7 +17,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { insertSurveyPointSchema, surveyPointBatchUploadSchema } from "@shared/schema";
 import type { InsertSurveyPoint, SurveyPoint, SurveyPointBatchUpload } from "@shared/schema";
-import { MapPin, Database, Globe, Award, BarChart3, CheckCircle, AlertCircle, Eye, Trash2, Upload, FileText, Navigation, ArrowLeft } from "lucide-react";
+import { MapPin, Database, Globe, Award, BarChart3, CheckCircle, AlertCircle, Eye, Trash2, Upload, FileText, Navigation, ArrowLeft, Layers } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Link } from "wouter";
 
@@ -259,6 +259,34 @@ export default function SurveyPoints() {
   }, [corsysValue, realYValue, realXValue]);
   
   const { register: batchRegister, handleSubmit: batchHandleSubmit, formState: { errors: batchErrors }, watch: batchWatch } = batchForm;
+
+  // Section batch upload form
+  const sectionBatchForm = useForm({
+    defaultValues: {
+      catacode: "",
+      corsys: "1",
+      lv: "0",
+      owner: "",
+      file: "",
+    },
+  });
+
+  const sectionBatchMutation = useMutation({
+    mutationFn: async (data: any) => {
+      return apiRequest({ method: "POST", url: "/api/survey-points/batch-section", data });
+    },
+    onSuccess: (result) => {
+      toast({ title: "成功", description: result.message || "地段批次上傳成功" });
+      sectionBatchForm.reset();
+      queryClient.invalidateQueries({ queryKey: ["/api/survey-points/count"] });
+      if (isViewDialogOpen) {
+        queryClient.invalidateQueries({ queryKey: ["/api/survey-points"] });
+      }
+    },
+    onError: (error: any) => {
+      toast({ title: "錯誤", description: error.message || "地段批次上傳時發生錯誤", variant: "destructive" });
+    },
+  });
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
@@ -739,6 +767,98 @@ export default function SurveyPoints() {
                 
                 <Button type="submit" disabled={batchMutation.isPending}>
                   {batchMutation.isPending ? "上傳中..." : "批次上傳"}
+                </Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+
+        {/* Section Batch Upload */}
+        <Card className="bg-white dark:bg-gray-800 shadow-md border border-gray-200 dark:border-gray-700 mt-8">
+          <CardHeader className="bg-purple-600 text-white">
+            <CardTitle className="text-lg font-medium flex items-center">
+              <Layers className="mr-2 h-5 w-5" />
+              地段批次上傳圖根點
+            </CardTitle>
+            <p className="text-purple-100 dark:text-purple-200 text-sm mt-1">
+              上傳整個地段的圖根點，格式：點名 公告Y 公告X [備註] [狀態]（段代碼統一設定）
+            </p>
+          </CardHeader>
+          <CardContent className="p-6">
+            <form
+              onSubmit={sectionBatchForm.handleSubmit((data) => sectionBatchMutation.mutate(data))}
+              className="space-y-6"
+            >
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div>
+                  <Label htmlFor="sb-catacode">段代碼</Label>
+                  <Input
+                    id="sb-catacode"
+                    {...sectionBatchForm.register("catacode")}
+                    placeholder="例如：KC0308"
+                    className="mt-1"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="sb-corsys">座標系統</Label>
+                  <Select
+                    defaultValue="1"
+                    onValueChange={(v) => sectionBatchForm.setValue("corsys", v)}
+                  >
+                    <SelectTrigger className="mt-1">
+                      <SelectValue placeholder="選擇座標系統" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="1">TWD97</SelectItem>
+                      <SelectItem value="0">TWD67（自動轉換）</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label htmlFor="sb-lv">階層</Label>
+                  <Input
+                    id="sb-lv"
+                    {...sectionBatchForm.register("lv")}
+                    placeholder="例如：0"
+                    className="mt-1"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="sb-owner">上傳者</Label>
+                  <Input
+                    id="sb-owner"
+                    {...sectionBatchForm.register("owner")}
+                    placeholder="例如：system"
+                    className="mt-1"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <Label htmlFor="sb-file">點位資料</Label>
+                <Textarea
+                  id="sb-file"
+                  {...sectionBatchForm.register("file")}
+                  placeholder={"範例：\nBDD348 2709882.555 216522.990\nBDD349 2709900.123 216530.456 現場確認 0\nBDD350 2709910.000 216540.000 備註 ?"}
+                  className="mt-1 font-mono text-sm"
+                  rows={6}
+                />
+              </div>
+
+              <div className="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-4">
+                <h4 className="text-sm font-medium text-purple-800 dark:text-purple-200 mb-2">格式說明</h4>
+                <div className="text-xs text-purple-700 dark:text-purple-300 space-y-1">
+                  <div>• 每行 3～5 個參數，以空白分隔</div>
+                  <div>• 格式：點名 公告Y 公告X [備註] [狀態]</div>
+                  <div>• 備註、狀態可省略（預設備註為「地段批次匯入」，狀態為「?」）</div>
+                  <div>• 段代碼、座標系統、階層、上傳者統一套用至整個地段所有點位</div>
+                  <div>• TWD67 座標系統時，系統自動計算 TWD97 座標</div>
+                </div>
+              </div>
+
+              <div className="flex justify-end">
+                <Button type="submit" disabled={sectionBatchMutation.isPending} className="bg-purple-600 hover:bg-purple-700">
+                  {sectionBatchMutation.isPending ? "上傳中..." : "批次上傳地段"}
                 </Button>
               </div>
             </form>

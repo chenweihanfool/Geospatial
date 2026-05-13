@@ -16,7 +16,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { insertCoordinateFormSchema, batchUploadSchema } from "@shared/schema";
 import type { InsertCoordinateFormData, CoordinateData, BatchUploadData } from "@shared/schema";
-import { MapPin, Database, Globe, Award, BarChart3, CheckCircle, AlertCircle, Eye, Trash2, Upload, FileText, Navigation, Search, Loader2 } from "lucide-react";
+import { MapPin, Database, Globe, Award, BarChart3, CheckCircle, AlertCircle, Eye, Trash2, Upload, FileText, Navigation, Search, Loader2, HardDrive } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Link } from "wouter";
 
@@ -252,6 +252,12 @@ export default function Home() {
                 <Button variant="outline" size="sm" data-testid="button-spatial-query">
                   <Search className="h-4 w-4 mr-2" />
                   空間查詢
+                </Button>
+              </Link>
+              <Link href="/database-management">
+                <Button variant="outline" size="sm" data-testid="button-database-management">
+                  <HardDrive className="h-4 w-4 mr-2" />
+                  資料庫管理
                 </Button>
               </Link>
               <ThemeToggle />
