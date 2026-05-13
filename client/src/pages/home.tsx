@@ -16,9 +16,53 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { insertCoordinateFormSchema, batchUploadSchema } from "@shared/schema";
 import type { InsertCoordinateFormData, CoordinateData, BatchUploadData } from "@shared/schema";
-import { MapPin, Database, Globe, Award, BarChart3, CheckCircle, AlertCircle, Eye, Trash2, Upload, FileText, Navigation, Search, Loader2, HardDrive } from "lucide-react";
+import { MapPin, Database, Globe, Award, BarChart3, CheckCircle, AlertCircle, Eye, Trash2, Upload, FileText, Navigation, Search, Loader2, HardDrive, History, Tag } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Link } from "wouter";
+
+const CHANGELOG = [
+  {
+    version: "v1.3.0",
+    date: "2026-05-13",
+    label: "latest",
+    items: [
+      "切換資料表改版：自動偵測所有資料表，下拉選單一鍵切換，不再需要手動輸入帳密",
+      "修正 CTL 批次上傳錯誤（relation does not exist），寫入前先驗證目標資料表是否存在",
+      "CTL 端點改用直接 SQL，支援 n_kc_ctl、kd_ctl、kc_ct2 三種資料表 schema",
+    ],
+  },
+  {
+    version: "v1.2.0",
+    date: "2026-05-13",
+    label: "",
+    items: [
+      "新增圖根點管理頁面：單筆輸入、批次文字上傳、CTL 地段批次拖曳上傳",
+      "新增資料庫管理頁面：查看所有資料表筆數、備份/還原/下載資料表（JSON + WKT 格式）",
+      "CTL 固定寬度格式解析，段代碼自動取自檔名，支援 TWD67/TWD97 座標轉換",
+    ],
+  },
+  {
+    version: "v1.1.0",
+    date: "2026-05-01",
+    label: "",
+    items: [
+      "新增地籍資料處理頁面：支援 BNP/COA/PAR 檔案解析、宗地選取、匯出 SHP",
+      "新增空間查詢頁面：以中心點 + 範圍查詢周圍圖根點/補點/界址點，下載 TXT",
+      "自動偵測段代碼座標系統（TWD67/TWD97）",
+    ],
+  },
+  {
+    version: "v1.0.0",
+    date: "2026-04-18",
+    label: "",
+    items: [
+      "補點座標輸入系統初始版本",
+      "支援單筆輸入與批次上傳（Y,X,備註 格式）",
+      "TWD67 自動轉換為 TWD97，PostGIS geometry 欄位儲存",
+      "Azure PostgreSQL 資料庫連線（SRID 3826 TWD97 TM2）",
+    ],
+  },
+];
 
 export default function Home() {
   const { toast } = useToast();
@@ -233,6 +277,9 @@ export default function Home() {
               <h1 className="text-2xl font-medium text-gray-700 dark:text-gray-200">補點座標輸入系統</h1>
               <span className="text-sm text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded">
                 Coordinate Input System
+              </span>
+              <span className="text-xs font-mono bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 px-2 py-1 rounded-full border border-blue-200 dark:border-blue-700">
+                {CHANGELOG[0].version}
               </span>
             </div>
             <div className="flex items-center space-x-4">
@@ -874,6 +921,53 @@ export default function Home() {
             </DialogContent>
           </Dialog>
         </div>
+        {/* Changelog */}
+        <Card className="bg-white dark:bg-gray-800 shadow-md border border-gray-200 dark:border-gray-700 mt-8">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base font-medium flex items-center text-gray-700 dark:text-gray-200">
+              <History className="mr-2 h-4 w-4 text-blue-600" />
+              版本更新記錄
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0 space-y-5">
+            {CHANGELOG.map((release) => (
+              <div key={release.version} className="flex gap-4">
+                {/* 版本號 + 日期 */}
+                <div className="flex-none w-28 text-right pt-0.5">
+                  <div className="flex items-center justify-end gap-1.5">
+                    <span className="font-mono text-sm font-semibold text-gray-800 dark:text-gray-200">
+                      {release.version}
+                    </span>
+                    {release.label === "latest" && (
+                      <span className="text-[10px] bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 px-1.5 py-0.5 rounded-full font-medium">
+                        最新
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">{release.date}</div>
+                </div>
+
+                {/* 分隔線 + 點 */}
+                <div className="flex flex-col items-center">
+                  <div className="w-2.5 h-2.5 rounded-full bg-blue-500 mt-1 flex-none" />
+                  <div className="w-px flex-1 bg-gray-200 dark:bg-gray-700 mt-1" />
+                </div>
+
+                {/* 更新項目 */}
+                <div className="flex-1 pb-4">
+                  <ul className="space-y-1">
+                    {release.items.map((item, i) => (
+                      <li key={i} className="flex items-start gap-2 text-sm text-gray-600 dark:text-gray-400">
+                        <Tag className="h-3 w-3 text-blue-400 mt-0.5 flex-none" />
+                        {item}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
       </main>
     </div>
   );
