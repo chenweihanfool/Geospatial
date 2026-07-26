@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { withBasePath } from "@/lib/basePath";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Link } from "wouter";
 import {
@@ -86,7 +87,7 @@ export default function DatabaseManagement() {
   });
 
   const handleDownload = (filename: string) => {
-    window.open(`/api/database/backups/${encodeURIComponent(filename)}/download`, "_blank");
+    window.open(withBasePath(`/api/database/backups/${encodeURIComponent(filename)}/download`), "_blank");
   };
 
   const tables: any[] = tablesData?.tables ?? [];

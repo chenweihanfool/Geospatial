@@ -1,0 +1,26 @@
+services:
+  app:
+    build:
+      context: .
+      args:
+        # Must match BASE_PATH below and the path Apache mounts this app at.
+        VITE_BASE_PATH: /geospatial
+    restart: unless-stopped
+    environment:
+      # Points at the existing Azure PostgreSQL instance (external, managed by
+      # Azure) -- not a container managed by this compose file, and not the
+      # self-hosted Postgres shared by tasktracker/pf-cwh.
+      DATABASE_URL: ${DATABASE_URL}
+      DEFAULT_TABLE: ${DEFAULT_TABLE:-public.n_kc_ctl}
+      # Server-side counterpart of the build-time VITE_BASE_PATH above --
+      # strips this prefix from incoming request paths (see server/index.ts)
+      # since Apache forwards the full /geospatial/... path unstripped.
+      BASE_PATH: /geospatial
+      NODE_ENV: production
+      PORT: "5000"
+    ports:
+      # Bound to localhost only -- Apache reverse-proxies /geospatial to this
+      # port, the app is never directly internet-reachable on its own port.
+      # NOTE: verify 5139 is free on the host before deploying (pf-cwh already
+      # uses 5137; check other running containers with `docker ps`).
+      - "127.0.0.1:5139:5000"

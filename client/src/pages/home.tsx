@@ -22,9 +22,21 @@ import { Link } from "wouter";
 
 const CHANGELOG = [
   {
-    version: "v1.4.0",
+    version: "v2.0.0",
     date: "2026-05-13",
     label: "latest",
+    items: [
+      "遷移部署準備：脫離 Replit，改為自架 Docker（掛在 /geospatial 子路徑）",
+      "移除 Replit 專屬外掛與 dev banner script、清掉未使用的驗證相關死依賴（passport/express-session/connect-pg-simple/memorystore/@neondatabase/serverless）",
+      "資料庫連線密碼改為環境變數 DATABASE_URL（原本寫死在程式碼中），Azure PostgreSQL 連線本身不變",
+      "新增 subpath 部署支援：vite base、wouter Router base、Express 路徑剝除 middleware、全域 fetch 前綴",
+      "新增 Dockerfile / docker-compose.yml",
+    ],
+  },
+  {
+    version: "v1.4.0",
+    date: "2026-05-13",
+    label: "",
     items: [
       "新增版本更新記錄功能：點擊 header 版本徽章即可查看歷次版本改動重點",
     ],

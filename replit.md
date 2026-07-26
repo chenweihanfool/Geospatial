@@ -28,7 +28,7 @@ User interest: Wants to create similar applications based on current project str
 
 ### Backend
 -   **Runtime**: Node.js with Express.js.
--   **Database**: PostgreSQL with PostGIS extension for spatial data, utilizing Neon serverless driver.
+-   **Database**: PostgreSQL with PostGIS extension for spatial data (Azure PostgreSQL, standard `pg` driver).
 -   **ORM**: Drizzle ORM for type-safe database interactions.
 -   **Validation**: Zod for runtime type checking.
 -   **Session Management**: Express sessions with PostgreSQL store.
@@ -51,7 +51,7 @@ User interest: Wants to create similar applications based on current project str
 
 ## External Dependencies
 
--   `@neondatabase/serverless`: Serverless PostgreSQL database connections.
+-   `pg`: Standard PostgreSQL driver (connects to Azure PostgreSQL).
 -   `drizzle-orm`: Type-safe ORM for database operations.
 -   `@tanstack/react-query`: For client-side server state management.
 -   `@radix-ui/*`: Accessible UI component primitives.

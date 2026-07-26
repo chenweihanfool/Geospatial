@@ -2,16 +2,31 @@ import { Pool } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import * as schema from "@shared/schema";
 
-// Default Azure PostgreSQL connection
-let defaultConnectionString = "postgresql://PostgreSQL_toufen:!!Toufen@toufen.postgres.database.azure.com:5432/postgres?sslmode=require";
+if (!process.env.DATABASE_URL) {
+  throw new Error("DATABASE_URL must be set. Did you forget to provision a database?");
+}
+
+// Parses host/port/database/username out of a postgres connection string for
+// display in the DB info UI and for reconstructing connection strings when
+// the user switches database via the /api/database/switch endpoint.
+function parseConnectionInfo(connectionString: string) {
+  const url = new URL(connectionString);
+  return {
+    host: url.hostname,
+    port: url.port ? parseInt(url.port, 10) : 5432,
+    database: url.pathname.replace(/^\//, ""),
+    username: decodeURIComponent(url.username),
+  };
+}
+
+// Default Azure PostgreSQL connection (external, not part of this app's Docker deployment)
+let defaultConnectionString = process.env.DATABASE_URL;
+const defaultParsed = parseConnectionInfo(defaultConnectionString);
 
 // Current database connection info
 let currentDbInfo = {
-  host: "toufen.postgres.database.azure.com",
-  port: 5432,
-  database: "postgres",
-  username: "PostgreSQL_toufen",
-  table: "public.n_kc_ctl",
+  ...defaultParsed,
+  table: process.env.DEFAULT_TABLE || "public.n_kc_ctl",
   connectionString: defaultConnectionString
 };
 
@@ -126,11 +141,8 @@ export async function switchDatabase(dbInfo: DatabaseConnection) {
     
     // Reset to default info
     currentDbInfo = {
-      host: "toufen.postgres.database.azure.com",
-      port: 5432,
-      database: "postgres",
-      username: "PostgreSQL_toufen",
-      table: "public.n_kc_ctl",
+      ...defaultParsed,
+      table: process.env.DEFAULT_TABLE || "public.n_kc_ctl",
       connectionString: defaultConnectionString
     };
     
