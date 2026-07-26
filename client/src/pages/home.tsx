@@ -22,9 +22,18 @@ import { Link } from "wouter";
 
 const CHANGELOG = [
   {
+    version: "v2.1.0",
+    date: "2026-07-26",
+    label: "latest",
+    items: [
+      "資料庫管理頁面改版：移除備份/還原功能（正式對外公網後不再提供此高風險操作）",
+      "改為 schema 樹狀圖：預設收合，展開可看該 schema 底下所有資料表的筆數與最後修改時間，最新異動的資料表會標示「最新」",
+    ],
+  },
+  {
     version: "v2.0.0",
     date: "2026-05-13",
-    label: "latest",
+    label: "",
     items: [
       "遷移部署準備：脫離 Replit，改為自架 Docker（掛在 /geospatial 子路徑）",
       "移除 Replit 專屬外掛與 dev banner script、清掉未使用的驗證相關死依賴（passport/express-session/connect-pg-simple/memorystore/@neondatabase/serverless）",
