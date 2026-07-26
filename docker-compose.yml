@@ -21,6 +21,5 @@ services:
     ports:
       # Bound to localhost only -- Apache reverse-proxies /geospatial to this
       # port, the app is never directly internet-reachable on its own port.
-      # NOTE: verify 5139 is free on the host before deploying (pf-cwh already
-      # uses 5137; check other running containers with `docker ps`).
+      # 5139 was already taken by aiportal; pf-cwh uses 5137.
       - "127.0.0.1:5140:5000"
