@@ -23,4 +23,4 @@ services:
       # port, the app is never directly internet-reachable on its own port.
       # NOTE: verify 5139 is free on the host before deploying (pf-cwh already
       # uses 5137; check other running containers with `docker ps`).
-      - "127.0.0.1:5139:5000"
+      - "127.0.0.1:5140:5000"
