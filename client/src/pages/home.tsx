@@ -22,9 +22,17 @@ import { Link } from "wouter";
 
 const CHANGELOG = [
   {
-    version: "v1.3.0",
+    version: "v1.4.0",
     date: "2026-05-13",
     label: "latest",
+    items: [
+      "新增版本更新記錄功能：點擊 header 版本徽章即可查看歷次版本改動重點",
+    ],
+  },
+  {
+    version: "v1.3.0",
+    date: "2026-05-13",
+    label: "",
     items: [
       "切換資料表改版：自動偵測所有資料表，下拉選單一鍵切換，不再需要手動輸入帳密",
       "修正 CTL 批次上傳錯誤（relation does not exist），寫入前先驗證目標資料表是否存在",
