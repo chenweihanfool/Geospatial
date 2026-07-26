@@ -24,10 +24,11 @@ RUN npm run build
 
 FROM node:20-alpine AS runtime
 WORKDIR /app
-ENV NODE_ENV=production
 
 COPY package.json package-lock.json ./
 RUN npm ci
+
+ENV NODE_ENV=production
 
 COPY --from=builder /app/dist ./dist
 # Only what `npm run db:push` (drizzle-kit) needs at deploy time -- the
